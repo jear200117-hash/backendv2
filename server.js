@@ -16,6 +16,9 @@ const rsvpRoutes = require('./routes/rsvp');
 const app = express();
 const PORT = config.PORT;
 
+// Behind a proxy/CDN (e.g., Render/Netlify), trust X-Forwarded-* headers
+app.set('trust proxy', true);
+
 // Security middleware
 app.use(helmet());
 
