@@ -16,8 +16,9 @@ const rsvpRoutes = require('./routes/rsvp');
 const app = express();
 const PORT = config.PORT;
 
-// Behind a proxy/CDN (e.g., Render/Netlify), trust X-Forwarded-* headers
-app.set('trust proxy', true);
+// Behind a proxy/CDN (e.g., Render/Netlify), trust a single proxy hop
+// This satisfies express-rate-limit validations and correctly reads X-Forwarded-For
+app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet());
@@ -33,8 +34,27 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // CORS configuration
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  config.FRONTEND_URL
+].filter(Boolean);
+
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    try {
+      const hostname = new URL(origin).hostname;
+      const isAllowed =
+        allowedOrigins.includes(origin) ||
+        /\.netlify\.app$/.test(hostname) ||
+        /onrender\.com$/.test(hostname);
+      if (isAllowed) return callback(null, true);
+    } catch (e) {
+      // If URL parsing fails, fall through and reject
+    }
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
