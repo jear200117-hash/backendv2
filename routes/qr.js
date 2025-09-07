@@ -236,12 +236,12 @@ router.get('/proxy-image', async (req, res) => {
     }
 
     // Validate that the URL is from our own server
-    if (!url.startsWith('http://localhost:5000/uploads/')) {
+    if (!url.startsWith('https://backendv2-nasy.onrender.com/uploads/')) {
       return res.status(400).json({ error: 'Invalid URL' });
     }
 
     // Convert URL to file path
-    const urlPath = url.replace('http://localhost:5000', '');
+    const urlPath = url.replace('https://backendv2-nasy.onrender.com', '');
     const filePath = path.join(__dirname, '..', urlPath);
     
     // Check if file exists
