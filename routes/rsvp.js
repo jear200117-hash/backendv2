@@ -22,8 +22,12 @@ router.post('/submit/:qrCode', async (req, res) => {
       return res.status(404).json({ error: 'Invitation not found' });
     }
 
-    // Allow RSVP updates - remove the restriction for re-submission
-    // Users can now update their RSVP response
+    // Check if RSVP has already been submitted (one-time only)
+    if (invitation.rsvp.status && invitation.rsvp.status !== 'pending') {
+      return res.status(400).json({ 
+        error: 'RSVP has already been submitted and cannot be changed. Please contact the hosts if you need to make changes.' 
+      });
+    }
 
     // Validate required fields for attending status
     if (status === 'attending') {

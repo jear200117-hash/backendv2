@@ -6,6 +6,8 @@ const Invitation = require('../models/Invitation');
 const { auth } = require('../middleware/auth');
 const cloudinary = require('../config/cloudinary');
 const { Readable } = require('stream');
+const { generateCustomQR } = require('../utils/qrWithLogo');
+const path = require('path');
 
 const router = express.Router();
 
@@ -22,21 +24,41 @@ router.post('/', auth, [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { guestName, guestRole, customMessage, invitationType } = req.body;
+    const { 
+      guestName, 
+      guestRole, 
+      customMessage, 
+      invitationType,
+      qrCenterType = 'monogram',
+      qrCenterOptions = {}
+    } = req.body;
 
     // Generate unique QR code
     const qrCodeId = uuidv4();
     const invitationUrl = `${process.env.FRONTEND_URL}/invitation/${qrCodeId}`;
     
-    // Generate QR code as buffer
-    const qrCodeBuffer = await QRCode.toBuffer(invitationUrl, {
+    // Set default monogram for wedding
+    const centerOptions = {
+      ...qrCenterOptions,
+      monogram: qrCenterOptions.monogram || 'M&E'
+    };
+
+    // Convert logo URL path to file system path if needed
+    if (qrCenterType === 'logo' && centerOptions.logoPath) {
+      if (centerOptions.logoPath.startsWith('/uploads/logos/')) {
+        centerOptions.logoPath = path.join(__dirname, '..', centerOptions.logoPath);
+      }
+    }
+
+    // Generate QR code with custom center content
+    const qrCodeBuffer = await generateCustomQR(invitationUrl, {
+      width: 300,
+      margin: 2,
       color: {
         dark: '#000000',
         light: '#FFFFFF'
-      },
-      width: 300,
-      margin: 2
-    });
+      }
+    }, qrCenterType, centerOptions);
 
     // Upload QR code to Cloudinary
     const stream = Readable.from(qrCodeBuffer);
@@ -131,7 +153,7 @@ router.get('/qr/:qrCode', async (req, res) => {
     if (!invitation.isOpened) {
       invitation.markAsOpened(req.ip, req.get('User-Agent'));
     }
-
+    
     res.json({
       invitation: {
         id: invitation._id,
@@ -140,7 +162,8 @@ router.get('/qr/:qrCode', async (req, res) => {
         customMessage: invitation.customMessage,
         invitationType: invitation.invitationType,
         isOpened: invitation.isOpened,
-        openedAt: invitation.openedAt
+        openedAt: invitation.openedAt,
+        rsvp: invitation.rsvp
       }
     });
   } catch (error) {

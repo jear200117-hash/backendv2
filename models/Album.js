@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 
 const albumSchema = new mongoose.Schema({
   name: {
@@ -27,7 +28,7 @@ const albumSchema = new mongoose.Schema({
   approvalStatus: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],
-    default: 'pending'
+    default: 'approved' // Host albums are auto-approved
   },
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -36,7 +37,7 @@ const albumSchema = new mongoose.Schema({
   },
   approvedAt: {
     type: Date,
-    default: null
+    default: Date.now
   },
   rejectionReason: {
     type: String,
@@ -46,13 +47,27 @@ const albumSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    default: null
+    required: true // Only hosts can create albums now
   },
   guestEmail: {
     type: String,
     trim: true,
     maxlength: 100,
     default: null
+  },
+  // QR Code related fields
+  qrCode: {
+    type: String,
+    unique: true,
+    required: true
+  },
+  qrCodeUrl: {
+    type: String,
+    default: null
+  },
+  uploadUrl: {
+    type: String,
+    required: true
   },
   mediaCount: {
     type: Number,
@@ -70,6 +85,18 @@ const albumSchema = new mongoose.Schema({
 albumSchema.index({ isPublic: 1, isFeatured: 1 });
 albumSchema.index({ createdBy: 1 });
 albumSchema.index({ approvalStatus: 1 });
+albumSchema.index({ qrCode: 1 }); // Index for QR code lookups
+
+// Method to generate QR code and upload URL
+albumSchema.methods.generateQRCode = function() {
+  const qrCode = uuidv4();
+  const uploadUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/upload/${qrCode}`;
+  
+  this.qrCode = qrCode;
+  this.uploadUrl = uploadUrl;
+  
+  return { qrCode, uploadUrl };
+};
 
 // Method to update media count
 albumSchema.methods.updateMediaCount = function() {

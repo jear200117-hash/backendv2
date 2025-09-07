@@ -31,10 +31,10 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Upload media to album (guest - no authentication required)
-router.post('/upload/:albumId', upload.array('media', 10), handleUploadError, async (req, res) => {
+// Upload media to album via QR code (guest - no authentication required)
+router.post('/upload/qr/:qrCode', upload.array('media', 10), handleUploadError, async (req, res) => {
   try {
-    const { albumId } = req.params;
+    const { qrCode } = req.params;
     const { uploadedBy } = req.body;
     const files = req.files;
 
@@ -42,23 +42,28 @@ router.post('/upload/:albumId', upload.array('media', 10), handleUploadError, as
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    // Check if album exists and is public
-    const album = await Album.findById(albumId);
+    if (!uploadedBy || uploadedBy.trim() === '') {
+      return res.status(400).json({ error: 'Guest name is required' });
+    }
+
+    // Find album by QR code
+    const album = await Album.findOne({ qrCode });
     if (!album) {
       return res.status(404).json({ error: 'Album not found' });
     }
 
-    console.log('Uploading to album:', {
-      albumId,
+    console.log('Uploading to album via QR code:', {
+      qrCode,
+      albumId: album._id,
       albumName: album.name,
       albumPublic: album.isPublic,
       filesCount: files.length,
       uploadedBy
     });
 
-    // Check if album is public or user is host
-    if (!album.isPublic && (!req.user || req.user.role !== 'host')) {
-      return res.status(403).json({ error: 'Cannot upload to private album' });
+    // Check if album is public and approved
+    if (!album.isPublic || album.approvalStatus !== 'approved') {
+      return res.status(403).json({ error: 'Album is not available for uploads' });
     }
 
     const uploadedMedia = [];
@@ -137,7 +142,7 @@ router.post('/upload/:albumId', upload.array('media', 10), handleUploadError, as
           url: mediaUrl,
           thumbnailUrl,
           mediaType,
-          album: albumId,
+          album: album._id,
           uploadedBy,
           uploadedFrom: {
             ip: req.ip,
@@ -163,16 +168,17 @@ router.post('/upload/:albumId', upload.array('media', 10), handleUploadError, as
     console.log('Final upload result:', {
       totalFiles: files.length,
       uploadedCount: uploadedMedia.length,
-      albumId
+      albumId: album._id,
+      qrCode
     });
 
     // Update album media count
     await album.updateMediaCount();
     
     // Refresh album data to get updated count
-    const updatedAlbum = await Album.findById(albumId);
+    const updatedAlbum = await Album.findById(album._id);
     console.log('Album updated:', {
-      albumId,
+      albumId: album._id,
       mediaCount: updatedAlbum.mediaCount,
       originalCount: album.mediaCount
     });
@@ -180,7 +186,8 @@ router.post('/upload/:albumId', upload.array('media', 10), handleUploadError, as
     console.log('Upload response:', {
       message: `${uploadedMedia.length} media files uploaded successfully`,
       mediaCount: uploadedMedia.length,
-      albumId
+      albumId: album._id,
+      qrCode
     });
 
     res.status(201).json({

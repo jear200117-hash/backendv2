@@ -3,6 +3,9 @@ const { body, validationResult } = require('express-validator');
 const Album = require('../models/Album');
 const Media = require('../models/Media');
 const { auth, optionalAuth } = require('../middleware/auth');
+const QRCode = require('qrcode');
+const { generateCustomQR } = require('../utils/qrWithLogo');
+const path = require('path');
 
 const router = express.Router();
 
@@ -19,11 +22,16 @@ router.post('/', auth, [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, description, isPublic = true, coverImage } = req.body;
+    const { 
+      name, 
+      description, 
+      isPublic = true, 
+      coverImage,
+      qrCenterType = 'monogram',
+      qrCenterOptions = {}
+    } = req.body;
 
     console.log('Host album creation request body:', req.body);
-    console.log('Cover image received:', coverImage);
-    console.log('Cover image type:', typeof coverImage);
 
     // Only hosts can create albums through this endpoint
     if (req.user.role !== 'host') {
@@ -34,20 +42,52 @@ router.post('/', auth, [
       name,
       description,
       isPublic,
-      coverImage, // Add cover image
+      coverImage,
       approvalStatus: 'approved', // Host albums are auto-approved
       createdBy: req.user._id
     });
 
-    console.log('Album object before save:', album);
+    // Generate QR code and upload URL
+    const { qrCode, uploadUrl } = album.generateQRCode();
+
+    // Set default monogram for wedding
+    const centerOptions = {
+      ...qrCenterOptions,
+      monogram: qrCenterOptions.monogram || 'M&E'
+    };
+
+    // Convert logo URL path to file system path if needed
+    if (qrCenterType === 'logo' && centerOptions.logoPath) {
+      if (centerOptions.logoPath.startsWith('/uploads/logos/')) {
+        centerOptions.logoPath = path.join(__dirname, '..', centerOptions.logoPath);
+      }
+    }
+
+    // Generate QR code image with custom center content
+    try {
+      const qrCodeBuffer = await generateCustomQR(uploadUrl, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#FFFFFF'
+        }
+      }, qrCenterType, centerOptions);
+
+      const qrCodeDataURL = `data:image/png;base64,${qrCodeBuffer.toString('base64')}`;
+      album.qrCodeUrl = qrCodeDataURL;
+    } catch (qrError) {
+      console.error('QR code generation error:', qrError);
+      // Continue without QR code image, but keep the QR code string
+    }
 
     await album.save();
     
-    console.log('Album saved successfully. Saved album data:', {
+    console.log('Album saved successfully with QR code:', {
       id: album._id,
       name: album.name,
-      coverImage: album.coverImage,
-      coverImageType: typeof album.coverImage
+      qrCode: album.qrCode,
+      uploadUrl: album.uploadUrl
     });
 
     res.status(201).json({
@@ -60,6 +100,9 @@ router.post('/', auth, [
         isPublic: album.isPublic,
         approvalStatus: album.approvalStatus,
         mediaCount: album.mediaCount,
+        qrCode: album.qrCode,
+        qrCodeUrl: album.qrCodeUrl,
+        uploadUrl: album.uploadUrl,
         createdAt: album.createdAt
       }
     });
@@ -69,67 +112,34 @@ router.post('/', auth, [
   }
 });
 
-// Create a new album (guest - no authentication required)
-router.post('/guest', [
-  body('name').trim().isLength({ min: 1, max: 100 }),
-  body('description').optional().trim().isLength({ max: 500 }),
-  body('isPublic').optional().isBoolean(),
-  body('guestEmail').trim().isEmail().isLength({ max: 100 }),
-  body('coverImage').optional().isString()
-], async (req, res) => {
+// Get album by QR code (for guest upload page)
+router.get('/qr/:qrCode', async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { qrCode } = req.params;
+
+    const album = await Album.findOne({ qrCode }).populate('createdBy', 'email');
+    
+    if (!album) {
+      return res.status(404).json({ error: 'Album not found' });
     }
 
-    const { name, description, isPublic = true, guestEmail, coverImage } = req.body;
+    // Check if album is public and approved
+    if (!album.isPublic || album.approvalStatus !== 'approved') {
+      return res.status(403).json({ error: 'Album is not available for uploads' });
+    }
 
-    console.log('Guest album creation request body:', req.body);
-    console.log('Cover image received:', coverImage);
-    console.log('Cover image type:', typeof coverImage);
-
-    console.log('Creating guest album:', {
-      name,
-      guestEmail,
-      approvalStatus: 'pending',
-      coverImage
-    });
-
-    const album = new Album({
-      name,
-      description,
-      isPublic,
-      coverImage, // Add cover image
-      approvalStatus: 'pending', // Guest albums always need approval
-      createdBy: null, // No user account
-      guestEmail: guestEmail // Store guest email for reference
-    });
-
-    await album.save();
-    
-    console.log('Guest album saved successfully. Saved album data:', {
-      id: album._id,
-      name: album.name,
-      coverImage: album.coverImage,
-      coverImageType: typeof album.coverImage
-    });
-
-    res.status(201).json({
-      message: 'Album created successfully and pending host approval',
+    res.json({
       album: {
         id: album._id,
         name: album.name,
         description: album.description,
         coverImage: album.coverImage,
-        isPublic: album.isPublic,
-        approvalStatus: album.approvalStatus,
         mediaCount: album.mediaCount,
-        createdAt: album.createdAt
+        uploadUrl: album.uploadUrl
       }
     });
   } catch (error) {
-    console.error('Create guest album error:', error);
+    console.error('Get album by QR code error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -143,7 +153,7 @@ router.get('/', optionalAuth, async (req, res) => {
     
     // If user is authenticated (host), show all albums
     if (req.user && req.user.role === 'host') {
-      filter = {};
+      filter = { approvalStatus: 'approved' }; // Hosts see all approved albums
     }
     
     if (featured === 'true') {
@@ -154,7 +164,8 @@ router.get('/', optionalAuth, async (req, res) => {
       .sort({ isFeatured: -1, lastUpdated: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit)
-      .populate('createdBy', 'email');
+      .populate('createdBy', 'email')
+      .select('-qrCode -uploadUrl'); // Don't expose QR codes in public listing
 
     const total = await Album.countDocuments(filter);
 
@@ -170,82 +181,74 @@ router.get('/', optionalAuth, async (req, res) => {
   }
 });
 
-// Get pending albums for host approval
-router.get('/pending', auth, async (req, res) => {
+// Get host albums with QR codes (host only)
+router.get('/host', auth, async (req, res) => {
   try {
     if (req.user.role !== 'host') {
       return res.status(403).json({ error: 'Access denied. Host only.' });
     }
 
-    const pendingAlbums = await Album.find({ approvalStatus: 'pending' })
-      .populate('createdBy', 'email')
-      .sort({ createdAt: -1 });
+    const albums = await Album.find({ createdBy: req.user._id })
+      .sort({ createdAt: -1 })
+      .populate('createdBy', 'email');
 
-    // Format pending albums to show creator info
-    const formattedPendingAlbums = pendingAlbums.map(album => ({
-      ...album.toObject(),
-      creatorInfo: album.createdBy 
-        ? { type: 'user', email: album.createdBy.email }
-        : { type: 'guest', email: album.guestEmail }
-    }));
-
-    res.json({ pendingAlbums: formattedPendingAlbums });
+    res.json({ albums });
   } catch (error) {
-    console.error('Get pending albums error:', error);
+    console.error('Get host albums error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Approve or reject album (host only)
-router.put('/:id/approve', auth, [
-  body('action').isIn(['approve', 'reject']),
-  body('rejectionReason').optional().trim().isLength({ max: 200 })
-], async (req, res) => {
+// Regenerate QR code for album (host only)
+router.put('/:id/regenerate-qr', auth, async (req, res) => {
   try {
     if (req.user.role !== 'host') {
       return res.status(403).json({ error: 'Access denied. Host only.' });
     }
 
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { id } = req.params;
-    const { action, rejectionReason } = req.body;
 
-    const album = await Album.findById(id);
+    const album = await Album.findOne({ 
+      _id: id, 
+      createdBy: req.user._id 
+    });
     
     if (!album) {
       return res.status(404).json({ error: 'Album not found' });
     }
 
-    if (action === 'approve') {
-      album.approvalStatus = 'approved';
-      album.approvedBy = req.user._id;
-      album.approvedAt = new Date();
-      album.rejectionReason = undefined;
-    } else {
-      album.approvalStatus = 'rejected';
-      album.rejectionReason = rejectionReason || 'No reason provided';
-      album.approvedBy = undefined;
-      album.approvedAt = undefined;
+    // Generate new QR code and upload URL
+    const { qrCode, uploadUrl } = album.generateQRCode();
+
+    // Generate new QR code image
+    try {
+      const qrCodeDataURL = await QRCode.toDataURL(uploadUrl, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#FFFFFF'
+        }
+      });
+      album.qrCodeUrl = qrCodeDataURL;
+    } catch (qrError) {
+      console.error('QR code generation error:', qrError);
     }
 
     await album.save();
 
     res.json({
-      message: `Album ${action}d successfully`,
+      message: 'QR code regenerated successfully',
       album: {
         id: album._id,
         name: album.name,
-        approvalStatus: album.approvalStatus,
-        approvedAt: album.approvedAt,
-        rejectionReason: album.rejectionReason
+        qrCode: album.qrCode,
+        qrCodeUrl: album.qrCodeUrl,
+        uploadUrl: album.uploadUrl
       }
     });
   } catch (error) {
-    console.error('Album approval error:', error);
+    console.error('Regenerate QR code error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -262,31 +265,13 @@ router.get('/:id', optionalAuth, async (req, res) => {
       return res.status(404).json({ error: 'Album not found' });
     }
 
-    // Check if album is public, approved, or user is host
-    if (!album.isPublic && (!req.user || req.user.role !== 'host')) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-    
-    // Hosts can see all albums (including pending ones)
-    if (req.user && req.user.role === 'host') {
-      // Host can see everything
-    } else {
-      // Guests can only see approved albums
-      if (album.approvalStatus !== 'approved') {
-        return res.status(403).json({ error: 'Album is pending approval' });
-      }
+    // Check if album is public and approved
+    if (!album.isPublic || album.approvalStatus !== 'approved') {
+      return res.status(403).json({ error: 'Album is not available' });
     }
 
     // Get media for this album
-    let mediaFilter = { album: id };
-    
-    // Hosts can see all media, guests only see media in approved albums
-    if (!req.user || req.user.role !== 'host') {
-      // For guests, only show media in approved albums
-      if (album.approvalStatus !== 'approved') {
-        mediaFilter.isApproved = true;
-      }
-    }
+    const mediaFilter = { album: id };
     
     console.log('Album media query:', {
       albumId: id,
@@ -308,17 +293,27 @@ router.get('/:id', optionalAuth, async (req, res) => {
       filter: mediaFilter
     });
 
+    // Prepare album response (don't expose QR codes to guests)
+    const albumResponse = {
+      id: album._id,
+      name: album.name,
+      description: album.description,
+      coverImage: album.coverImage,
+      isFeatured: album.isFeatured,
+      mediaCount: album.mediaCount,
+      createdAt: album.createdAt,
+      lastUpdated: album.lastUpdated
+    };
+
+    // Include QR code info for hosts
+    if (req.user && req.user.role === 'host' && album.createdBy.toString() === req.user._id.toString()) {
+      albumResponse.qrCode = album.qrCode;
+      albumResponse.qrCodeUrl = album.qrCodeUrl;
+      albumResponse.uploadUrl = album.uploadUrl;
+    }
+
     res.json({
-      album: {
-        id: album._id,
-        name: album.name,
-        description: album.description,
-        coverImage: album.coverImage,
-        isFeatured: album.isFeatured,
-        mediaCount: album.mediaCount,
-        createdAt: album.createdAt,
-        lastUpdated: album.lastUpdated
-      },
+      album: albumResponse,
       media,
       totalPages: Math.ceil(totalMedia / limit),
       currentPage: parseInt(page),

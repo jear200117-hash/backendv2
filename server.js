@@ -74,8 +74,26 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// Serve static files for uploaded logos with CORS headers
+app.use('/uploads', (req, res, next) => {
+  // Set CORS headers for static files
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+}, express.static('uploads'));
+
 // Note: All media files (images/videos) and QR codes are now stored in Cloudinary
-// No local uploads directory needed
+// Logo uploads are stored locally for QR code generation
 
 // API Routes
 app.use('/api/auth', authRoutes);
