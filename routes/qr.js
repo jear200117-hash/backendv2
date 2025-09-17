@@ -229,8 +229,8 @@ router.get('/proxy-image', async (req, res) => {
     }
 
     // For local file URLs (legacy support)
-    if (url.startsWith('http://localhost:5000/uploads/')) {
-      const urlPath = url.replace('http://localhost:5000', '');
+    if (url.startsWith('https://backendv2-nasy.onrender.com/uploads/')) {
+      const urlPath = url.replace('https://backendv2-nasy.onrender.com', '');
       const filePath = path.join(__dirname, '..', urlPath);
       
       if (fs.existsSync(filePath)) {

@@ -95,7 +95,7 @@ albumSchema.index({ qrCode: 1 }); // Index for QR code lookups
 // Method to generate QR code and upload URL
 albumSchema.methods.generateQRCode = function() {
   const qrCode = uuidv4();
-  const uploadUrl = `${process.env.FRONTEND_URL || 'https://backendv2-nasy.onrender.com'}/upload/${qrCode}`;
+  const uploadUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/upload/${qrCode}`;
   
   this.qrCode = qrCode;
   this.uploadUrl = uploadUrl;
