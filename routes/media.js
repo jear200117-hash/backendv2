@@ -3,33 +3,21 @@ const { body, validationResult } = require('express-validator');
 const Media = require('../models/Media');
 const Album = require('../models/Album');
 const { upload, handleUploadError } = require('../middleware/upload');
+const { buildDriveViewUrl, buildDriveDownloadUrl } = require('../utils/gdriveUrls');
 const { auth } = require('../middleware/auth');
-const cloudinary = require('cloudinary').v2;
-// Note: config no longer needed since we're not using local uploads
+const googleDriveService = require('../services/googleDriveService');
 
 const router = express.Router();
 
-// Note: All media files are now stored in Cloudinary, no local URLs needed
+// Note: All media files are now stored in Google Drive
 
-// Helper function to generate unique filename for Cloudinary
+// Helper function to generate unique filename for Google Drive
 const generateUniqueFilename = (originalName) => {
   const timestamp = Date.now();
   const randomString = Math.random().toString(36).substring(2, 10);
   const extension = originalName.split('.').pop();
   return `${timestamp}-${randomString}.${extension}`;
 };
-
-// Configure Cloudinary (required for media uploads)
-if (!process.env.CLOUDINARY_CLOUD_NAME) {
-  console.error('Cloudinary configuration missing! Media uploads will fail.');
-  console.error('Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET');
-}
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
 
 // Upload media to album via QR code (guest - no authentication required)
 router.post('/upload/qr/:qrCode', upload.array('media', 10), handleUploadError, async (req, res) => {
@@ -70,77 +58,44 @@ router.post('/upload/qr/:qrCode', upload.array('media', 10), handleUploadError, 
 
     for (const file of files) {
       try {
-        // Generate unique filename for Cloudinary
-        const uniqueFilename = generateUniqueFilename(file.originalname);
-        
         // Debug: Check if file.buffer exists
         if (!file.buffer) {
           console.error('File buffer is undefined for file:', file.originalname);
           throw new Error('File buffer is undefined');
         }
         
-        console.log('Uploading to Cloudinary:', {
-          filename: uniqueFilename,
+        console.log('Uploading to Google Drive:', {
+          filename: file.originalname,
           size: file.size,
           mimeType: file.mimetype,
           bufferLength: file.buffer.length
         });
         
-        // Upload directly to Cloudinary using buffer stream
-        const uploadResult = await new Promise((resolve, reject) => {
-          const uploadStream = cloudinary.uploader.upload_stream(
-            {
-              resource_type: 'auto',
-              folder: 'wedding-media',
-              public_id: uniqueFilename,
-              quality: 'auto'
-            },
-            (error, result) => {
-              if (error) {
-                console.error('Cloudinary upload error:', error);
-                reject(error);
-              } else {
-                resolve(result);
-              }
-            }
-          );
-          
-          // Create a readable stream from buffer and pipe to Cloudinary
-          const { Readable } = require('stream');
-          const bufferStream = Readable.from(file.buffer);
-          bufferStream.pipe(uploadStream);
+        // Upload to Google Drive
+        const uploadResult = await googleDriveService.uploadMedia(
+          file.buffer,
+          file.originalname,
+          album._id,
+          uploadedBy
+        );
+
+        console.log('Google Drive upload result:', {
+          fileId: uploadResult.fileInfo.id,
+          webContentLink: uploadResult.fileInfo.webContentLink,
+          size: uploadResult.fileInfo.size
         });
-
-        console.log('Cloudinary upload result:', {
-          public_id: uploadResult.public_id,
-          secure_url: uploadResult.secure_url,
-          format: uploadResult.format,
-          size: uploadResult.bytes
-        });
-
-        let mediaUrl = uploadResult.secure_url;
-        let thumbnailUrl = null;
-
-        // Generate thumbnail for images
-        if (file.mimetype.startsWith('image/')) {
-          thumbnailUrl = cloudinary.url(uploadResult.public_id, {
-            width: 300,
-            height: 300,
-            crop: 'fill',
-            quality: 'auto',
-            format: 'jpg'
-          });
-        }
 
         const mediaType = file.mimetype.startsWith('image/') ? 'image' : 'video';
         
         const media = new Media({
-          filename: uniqueFilename, // Use uniqueFilename for DB
+          filename: uploadResult.fileInfo.name,
           originalName: file.originalname,
           mimeType: file.mimetype,
           size: file.size,
-          url: mediaUrl,
-          thumbnailUrl,
+          url: buildDriveViewUrl(uploadResult.fileInfo.id, 1600) || uploadResult.fileInfo.webContentLink,
+          thumbnailUrl: (uploadResult.thumbnailInfo?.id ? buildDriveViewUrl(uploadResult.thumbnailInfo.id, 300) : null) || uploadResult.thumbnailInfo?.webContentLink || null,
+          googleDriveFileId: uploadResult.fileInfo.id,
+          googleDriveThumbnailId: uploadResult.thumbnailInfo?.id || null,
           mediaType,
           album: album._id,
           uploadedBy,
@@ -237,77 +192,44 @@ router.post('/host/upload/:albumId', auth, upload.array('media', 10), handleUplo
 
     for (const file of files) {
       try {
-        // Generate unique filename for Cloudinary
-        const uniqueFilename = generateUniqueFilename(file.originalname);
-        
         // Debug: Check if file.buffer exists
         if (!file.buffer) {
           console.error('File buffer is undefined for file:', file.originalname);
           throw new Error('File buffer is undefined');
         }
         
-        console.log('Uploading to Cloudinary (host):', {
-          filename: uniqueFilename,
+        console.log('Uploading to Google Drive (host):', {
+          filename: file.originalname,
           size: file.size,
           mimeType: file.mimetype,
           bufferLength: file.buffer.length
         });
         
-        // Upload directly to Cloudinary using buffer stream
-        const uploadResult = await new Promise((resolve, reject) => {
-          const uploadStream = cloudinary.uploader.upload_stream(
-            {
-              resource_type: 'auto',
-              folder: 'wedding-media',
-              public_id: uniqueFilename,
-              quality: 'auto'
-            },
-            (error, result) => {
-              if (error) {
-                console.error('Cloudinary upload error:', error);
-                reject(error);
-              } else {
-                resolve(result);
-              }
-            }
-          );
-          
-          // Create a readable stream from buffer and pipe to Cloudinary
-          const { Readable } = require('stream');
-          const bufferStream = Readable.from(file.buffer);
-          bufferStream.pipe(uploadStream);
+        // Upload to Google Drive
+        const uploadResult = await googleDriveService.uploadMedia(
+          file.buffer,
+          file.originalname,
+          albumId,
+          uploadedBy || req.user.email
+        );
+
+        console.log('Google Drive upload result (host):', {
+          fileId: uploadResult.fileInfo.id,
+          webContentLink: uploadResult.fileInfo.webContentLink,
+          size: uploadResult.fileInfo.size
         });
-
-        console.log('Cloudinary upload result (host):', {
-          public_id: uploadResult.public_id,
-          secure_url: uploadResult.secure_url,
-          format: uploadResult.format,
-          size: uploadResult.bytes
-        });
-
-        const mediaUrl = uploadResult.secure_url;
-        let thumbnailUrl = null;
-
-        // Generate thumbnail for images
-        if (file.mimetype.startsWith('image/')) {
-          thumbnailUrl = cloudinary.url(uploadResult.public_id, {
-            width: 300,
-            height: 300,
-            crop: 'fill',
-            quality: 'auto',
-            format: 'jpg'
-          });
-        }
 
         const mediaType = file.mimetype.startsWith('image/') ? 'image' : 'video';
         
         const media = new Media({
-          filename: uniqueFilename,
+          filename: uploadResult.fileInfo.name,
           originalName: file.originalname,
           mimeType: file.mimetype,
           size: file.size,
-          url: mediaUrl,
-          thumbnailUrl,
+          url: buildDriveViewUrl(uploadResult.fileInfo.id, 1600) || uploadResult.fileInfo.webContentLink,
+          thumbnailUrl: (uploadResult.thumbnailInfo?.id ? buildDriveViewUrl(uploadResult.thumbnailInfo.id, 300) : null) || uploadResult.thumbnailInfo?.webContentLink || null,
+          googleDriveFileId: uploadResult.fileInfo.id,
+          googleDriveThumbnailId: uploadResult.thumbnailInfo?.id || null,
           mediaType,
           album: albumId,
           uploadedBy: uploadedBy || req.user.email, // Use host email if not specified
@@ -452,12 +374,23 @@ router.delete('/:id', auth, async (req, res) => {
       return res.status(404).json({ error: 'Media not found' });
     }
 
-    // Optional: Delete from Cloudinary if used
-    if (process.env.CLOUDINARY_CLOUD_NAME && media.url.includes('cloudinary')) {
+    // Delete from Google Drive if file exists
+    if (media.googleDriveFileId) {
       try {
-        await cloudinary.uploader.destroy(media.filename);
-      } catch (cloudinaryError) {
-        console.warn('Could not delete from Cloudinary:', cloudinaryError);
+        await googleDriveService.deleteFile(media.googleDriveFileId);
+        console.log('Deleted main file from Google Drive:', media.googleDriveFileId);
+      } catch (gdriveError) {
+        console.warn('Could not delete main file from Google Drive:', gdriveError);
+      }
+    }
+
+    // Delete thumbnail from Google Drive if exists
+    if (media.googleDriveThumbnailId) {
+      try {
+        await googleDriveService.deleteFile(media.googleDriveThumbnailId);
+        console.log('Deleted thumbnail from Google Drive:', media.googleDriveThumbnailId);
+      } catch (gdriveError) {
+        console.warn('Could not delete thumbnail from Google Drive:', gdriveError);
       }
     }
 

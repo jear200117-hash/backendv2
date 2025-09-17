@@ -9,7 +9,12 @@ const invitationSchema = new mongoose.Schema({
   guestRole: {
     type: String,
     required: true,
-    enum: ['Ninong', 'Ninang', 'Best Man', 'Bridesmaid', 'General Guest'],
+    enum: [
+      'Ninong', 'Ninang', 'Best Man', 'Bridesmaid', 'General Guest',
+      'Father of the Groom', 'Mother of the Groom', 'Father of the Bride', 'Mother of the Bride',
+      'Groomsman', 'Flower Girl', 'Ring Bearer', 'Arras Bearer', 'Bible Bearer',
+      'Maid of Honor', 'Little Bride', 'Male', 'Female', 'Groom', 'Bride'
+    ],
     default: 'General Guest'
   },
   customMessage: {
@@ -26,6 +31,11 @@ const invitationSchema = new mongoose.Schema({
   qrCodePath: {
     type: String,
     required: true
+  },
+  // Google Drive file ID for QR code
+  qrCodeFileId: {
+    type: String,
+    default: null
   },
   isActive: {
     type: Boolean,

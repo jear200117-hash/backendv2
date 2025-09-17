@@ -4,9 +4,9 @@ const QRCode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
 const Invitation = require('../models/Invitation');
 const { auth } = require('../middleware/auth');
-const cloudinary = require('../config/cloudinary');
-const { Readable } = require('stream');
+const googleDriveService = require('../services/googleDriveService');
 const { generateCustomQR } = require('../utils/qrWithLogo');
+const { buildDriveViewUrl, buildDriveDownloadUrl } = require('../utils/gdriveUrls');
 const path = require('path');
 
 const router = express.Router();
@@ -14,7 +14,12 @@ const router = express.Router();
 // Create a new invitation
 router.post('/', auth, [
   body('guestName').trim().isLength({ min: 1, max: 100 }),
-  body('guestRole').isIn(['Ninong', 'Ninang', 'Best Man', 'Bridesmaid', 'General Guest']),
+  body('guestRole').isIn([
+    'Ninong', 'Ninang', 'Best Man', 'Bridesmaid', 'General Guest',
+    'Father of the Groom', 'Mother of the Groom', 'Father of the Bride', 'Mother of the Bride',
+    'Groomsman', 'Flower Girl', 'Ring Bearer', 'Arras Bearer', 'Bible Bearer',
+    'Maid of Honor', 'Little Bride', 'Male', 'Female', 'Groom', 'Bride'
+  ]),
   body('customMessage').trim().isLength({ min: 1, max: 1000 }),
   body('invitationType').isIn(['personalized', 'general'])
 ], async (req, res) => {
@@ -60,22 +65,8 @@ router.post('/', auth, [
       }
     }, qrCenterType, centerOptions);
 
-    // Upload QR code to Cloudinary
-    const stream = Readable.from(qrCodeBuffer);
-    const uploadResult = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: 'wedding-qr-codes',
-          public_id: `qr-${qrCodeId}`,
-          format: 'png'
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      stream.pipe(uploadStream);
-    });
+    // Upload QR code to Google Drive
+    const uploadResult = await googleDriveService.uploadQRCode(qrCodeBuffer, qrCodeId);
 
     // Create invitation
     const invitation = new Invitation({
@@ -83,7 +74,8 @@ router.post('/', auth, [
       guestRole,
       customMessage,
       qrCode: qrCodeId,
-      qrCodePath: uploadResult.secure_url,
+      qrCodePath: buildDriveViewUrl(uploadResult.id, 800) || uploadResult.webContentLink,
+      qrCodeFileId: uploadResult.id,
       invitationType,
       createdBy: req.user._id
     });
@@ -97,7 +89,8 @@ router.post('/', auth, [
         guestName: invitation.guestName,
         guestRole: invitation.guestRole,
         qrCode: invitation.qrCode,
-        qrCodeUrl: uploadResult.secure_url,
+        qrCodeUrl: buildDriveViewUrl(uploadResult.id, 800) || uploadResult.webContentLink,
+        qrCodeDownloadUrl: buildDriveDownloadUrl(uploadResult.id),
         invitationUrl
       }
     });
@@ -123,12 +116,26 @@ router.get('/', auth, async (req, res) => {
 
     const total = await Invitation.countDocuments(filter);
 
-    res.json({
+    const payload = {
       invitations,
       totalPages: Math.ceil(total / limit),
       currentPage: page,
       total
-    });
+    };
+
+    try {
+      const crypto = require('crypto');
+      const bodyString = JSON.stringify(payload);
+      const etag = 'W/"' + crypto.createHash('sha1').update(bodyString).digest('hex') + '"';
+      const ifNoneMatch = req.headers['if-none-match'];
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+      res.set('ETag', etag);
+      res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+    } catch (_) {}
+
+    res.json(payload);
   } catch (error) {
     console.error('Get invitations error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -154,7 +161,7 @@ router.get('/qr/:qrCode', async (req, res) => {
       invitation.markAsOpened(req.ip, req.get('User-Agent'));
     }
     
-    res.json({
+    const payload = {
       invitation: {
         id: invitation._id,
         guestName: invitation.guestName,
@@ -165,7 +172,20 @@ router.get('/qr/:qrCode', async (req, res) => {
         openedAt: invitation.openedAt,
         rsvp: invitation.rsvp
       }
-    });
+    };
+    try {
+      const crypto = require('crypto');
+      const bodyString = JSON.stringify(payload);
+      const etag = 'W/"' + crypto.createHash('sha1').update(bodyString).digest('hex') + '"';
+      const ifNoneMatch = req.headers['if-none-match'];
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+      res.set('ETag', etag);
+      res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+    } catch (_) {}
+
+    res.json(payload);
   } catch (error) {
     console.error('Get invitation by QR error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -175,7 +195,12 @@ router.get('/qr/:qrCode', async (req, res) => {
 // Update invitation
 router.put('/:id', auth, [
   body('guestName').trim().isLength({ min: 1, max: 100 }),
-  body('guestRole').isIn(['Ninong', 'Ninang', 'Best Man', 'Bridesmaid', 'General Guest']),
+  body('guestRole').isIn([
+    'Ninong', 'Ninang', 'Best Man', 'Bridesmaid', 'General Guest',
+    'Father of the Groom', 'Mother of the Groom', 'Father of the Bride', 'Mother of the Bride',
+    'Groomsman', 'Flower Girl', 'Ring Bearer', 'Arras Bearer', 'Bible Bearer',
+    'Maid of Honor', 'Little Bride', 'Male', 'Female', 'Groom', 'Bride'
+  ]),
   body('customMessage').trim().isLength({ min: 1, max: 1000 }),
   body('isActive').isBoolean()
 ], async (req, res) => {
@@ -234,14 +259,14 @@ router.delete('/:id', auth, async (req, res) => {
       return res.status(404).json({ error: 'Invitation not found' });
     }
 
-    // Delete QR code from Cloudinary
-    try {
-      if (invitation.qrCodePath && invitation.qrCodePath.includes('cloudinary')) {
-        const publicId = invitation.qrCodePath.split('/').pop().split('.')[0];
-        await cloudinary.uploader.destroy(`wedding-qr-codes/${publicId}`);
+    // Delete QR code from Google Drive
+    if (invitation.qrCodeFileId) {
+      try {
+        await googleDriveService.deleteFile(invitation.qrCodeFileId);
+        console.log('Deleted QR code from Google Drive:', invitation.qrCodeFileId);
+      } catch (gdriveError) {
+        console.warn('Could not delete QR code from Google Drive:', gdriveError.message);
       }
-    } catch (cloudinaryError) {
-      console.warn('Could not delete QR code from Cloudinary:', cloudinaryError.message);
     }
 
     await invitation.deleteOne();

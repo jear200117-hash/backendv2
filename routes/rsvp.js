@@ -164,10 +164,22 @@ router.get('/all', auth, async (req, res) => {
         .reduce((sum, inv) => sum + inv.rsvp.attendeeCount, 0)
     };
 
-    res.json({
-      invitations,
-      stats
-    });
+    const payload = { invitations, stats };
+    try {
+      const crypto = require('crypto');
+      const bodyString = JSON.stringify(payload);
+      const etag = 'W/"' + crypto.createHash('sha1').update(bodyString).digest('hex') + '"';
+      const ifNoneMatch = req.headers['if-none-match'];
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+      res.set('ETag', etag);
+      res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+    } catch (_) {
+      // If hashing fails, proceed without ETag
+    }
+
+    res.json(payload);
 
   } catch (error) {
     console.error('RSVP list error:', error);

@@ -42,20 +42,36 @@ async function generateQRWithLogo(url, options = {}, logoPath = null, logoOption
       return qrCodeBuffer;
     }
 
-    // Convert URL path to file system path if needed
-    let actualLogoPath = logoPath;
-    if (logoPath.startsWith('/uploads/logos/')) {
-      actualLogoPath = path.join(__dirname, '..', logoPath);
-    }
-
-    // Check if logo file exists
-    if (!fs.existsSync(actualLogoPath)) {
-      console.error('Logo file not found:', actualLogoPath);
-      throw new Error(`Logo file not found: ${logoPath}`);
+    // Resolve logo buffer: support local path and remote URL (e.g., Google Drive)
+    let logoSourceBuffer;
+    try {
+      // Remote URL (http/https)
+      if (/^https?:\/\//i.test(logoPath)) {
+        const response = await fetch(logoPath);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch logo from URL: ${logoPath} (status ${response.status})`);
+        }
+        const arrayBuf = await response.arrayBuffer();
+        logoSourceBuffer = Buffer.from(arrayBuf);
+      } else {
+        // Convert URL path to file system path if needed
+        let actualLogoPath = logoPath;
+        if (logoPath.startsWith('/uploads/logos/')) {
+          actualLogoPath = path.join(__dirname, '..', logoPath);
+        }
+        if (!fs.existsSync(actualLogoPath)) {
+          console.error('Logo file not found:', actualLogoPath);
+          throw new Error(`Logo file not found: ${logoPath}`);
+        }
+        logoSourceBuffer = fs.readFileSync(actualLogoPath);
+      }
+    } catch (e) {
+      console.error('Error loading logo source:', e);
+      throw e;
     }
 
     // Load and process logo
-    const logoBuffer = await sharp(actualLogoPath)
+    const logoBuffer = await sharp(logoSourceBuffer)
       .resize(logoSize, logoSize, {
         fit: 'contain',
         background: { r: 255, g: 255, b: 255, alpha: 0 }

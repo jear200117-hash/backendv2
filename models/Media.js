@@ -25,6 +25,15 @@ const mediaSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  // Google Drive file IDs
+  googleDriveFileId: {
+    type: String,
+    required: true
+  },
+  googleDriveThumbnailId: {
+    type: String,
+    default: null
+  },
   mediaType: {
     type: String,
     enum: ['image', 'video'],

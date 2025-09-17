@@ -65,6 +65,11 @@ const albumSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  // Google Drive file ID for QR code
+  qrCodeFileId: {
+    type: String,
+    default: null
+  },
   uploadUrl: {
     type: String,
     required: true
@@ -90,7 +95,7 @@ albumSchema.index({ qrCode: 1 }); // Index for QR code lookups
 // Method to generate QR code and upload URL
 albumSchema.methods.generateQRCode = function() {
   const qrCode = uuidv4();
-  const uploadUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/upload/${qrCode}`;
+  const uploadUrl = `${process.env.FRONTEND_URL || 'https://backendv2-nasy.onrender.com'}/upload/${qrCode}`;
   
   this.qrCode = qrCode;
   this.uploadUrl = uploadUrl;

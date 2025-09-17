@@ -5,7 +5,9 @@ const Media = require('../models/Media');
 const { auth, optionalAuth } = require('../middleware/auth');
 const QRCode = require('qrcode');
 const { generateCustomQR } = require('../utils/qrWithLogo');
+const { buildDriveViewUrl, buildDriveDownloadUrl } = require('../utils/gdriveUrls');
 const path = require('path');
+const googleDriveService = require('../services/googleDriveService');
 
 const router = express.Router();
 
@@ -74,8 +76,11 @@ router.post('/', auth, [
         }
       }, qrCenterType, centerOptions);
 
-      const qrCodeDataURL = `data:image/png;base64,${qrCodeBuffer.toString('base64')}`;
-      album.qrCodeUrl = qrCodeDataURL;
+      // Upload QR code to Google Drive
+      const qrCodeUpload = await googleDriveService.uploadQRCode(qrCodeBuffer, qrCode);
+      
+      album.qrCodeUrl = buildDriveViewUrl(qrCodeUpload.id, 800) || qrCodeUpload.webContentLink;
+      album.qrCodeFileId = qrCodeUpload.id;
     } catch (qrError) {
       console.error('QR code generation error:', qrError);
       // Continue without QR code image, but keep the QR code string
@@ -128,7 +133,7 @@ router.get('/qr/:qrCode', async (req, res) => {
       return res.status(403).json({ error: 'Album is not available for uploads' });
     }
 
-    res.json({
+    const payload = {
       album: {
         id: album._id,
         name: album.name,
@@ -137,7 +142,20 @@ router.get('/qr/:qrCode', async (req, res) => {
         mediaCount: album.mediaCount,
         uploadUrl: album.uploadUrl
       }
-    });
+    };
+    try {
+      const crypto = require('crypto');
+      const bodyString = JSON.stringify(payload);
+      const etag = 'W/"' + crypto.createHash('sha1').update(bodyString).digest('hex') + '"';
+      const ifNoneMatch = req.headers['if-none-match'];
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+      res.set('ETag', etag);
+      res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+    } catch (_) {}
+
+    res.json(payload);
   } catch (error) {
     console.error('Get album by QR code error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -169,12 +187,26 @@ router.get('/', optionalAuth, async (req, res) => {
 
     const total = await Album.countDocuments(filter);
 
-    res.json({
+    const payload = {
       albums,
       totalPages: Math.ceil(total / limit),
       currentPage: parseInt(page),
       total
-    });
+    };
+
+    try {
+      const crypto = require('crypto');
+      const bodyString = JSON.stringify(payload);
+      const etag = 'W/"' + crypto.createHash('sha1').update(bodyString).digest('hex') + '"';
+      const ifNoneMatch = req.headers['if-none-match'];
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+      res.set('ETag', etag);
+      res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+    } catch (_) {}
+
+    res.json(payload);
   } catch (error) {
     console.error('Get albums error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -222,7 +254,7 @@ router.put('/:id/regenerate-qr', auth, async (req, res) => {
 
     // Generate new QR code image
     try {
-      const qrCodeDataURL = await QRCode.toDataURL(uploadUrl, {
+      const qrCodeBuffer = await QRCode.toBuffer(uploadUrl, {
         width: 300,
         margin: 2,
         color: {
@@ -230,7 +262,12 @@ router.put('/:id/regenerate-qr', auth, async (req, res) => {
           light: '#FFFFFF'
         }
       });
-      album.qrCodeUrl = qrCodeDataURL;
+
+      // Upload QR code to Google Drive
+      const qrCodeUpload = await googleDriveService.uploadQRCode(qrCodeBuffer, qrCode);
+      
+      album.qrCodeUrl = qrCodeUpload.webContentLink;
+      album.qrCodeFileId = qrCodeUpload.id;
     } catch (qrError) {
       console.error('QR code generation error:', qrError);
     }

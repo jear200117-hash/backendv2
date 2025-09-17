@@ -95,6 +95,12 @@ app.use('/uploads', (req, res, next) => {
 // Note: All media files (images/videos) and QR codes are now stored in Cloudinary
 // Logo uploads are stored locally for QR code generation
 
+// Attach a lightweight request id for tracing
+app.use((req, res, next) => {
+  req.id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  next();
+});
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/invitations', invitationRoutes);
@@ -108,18 +114,20 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Wedding Website API is running' });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
+// 404 handler (centralized)
+const { notFound, errorHandler } = require('./middleware/errorHandler');
+app.use('*', notFound);
 
 // Global error handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ 
-    error: 'Something went wrong!',
-    message: config.NODE_ENV === 'development' ? err.message : 'Internal server error'
-  });
+app.use(errorHandler);
+
+// Process-level safety nets
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
 });
 
 // Database connection

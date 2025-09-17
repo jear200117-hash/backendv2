@@ -5,26 +5,12 @@ const { generateCustomQR } = require('../utils/qrWithLogo');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const googleDriveService = require('../services/googleDriveService');
 
 const router = express.Router();
 
-// Serve uploaded logos
-router.use('/uploads/logos', express.static(path.join(__dirname, '../uploads/logos')));
-
-// Configure multer for logo uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../uploads/logos');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'logo-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
+// Configure multer for logo uploads (memory storage for Google Drive)
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage: storage,
@@ -186,12 +172,17 @@ router.post('/upload-logo', auth, upload.single('logo'), async (req, res) => {
       return res.status(400).json({ error: 'No logo file provided' });
     }
 
-    const logoUrl = `/uploads/logos/${req.file.filename}`;
+    // Upload to Google Drive
+    const uploadResult = await googleDriveService.uploadLogo(
+      req.file.buffer,
+      req.file.originalname
+    );
     
     res.json({
       message: 'Logo uploaded successfully',
-      logoUrl,
-      filename: req.file.filename,
+      logoUrl: uploadResult.webContentLink,
+      logoFileId: uploadResult.id,
+      filename: uploadResult.name,
       originalName: req.file.originalname,
       size: req.file.size
     });
@@ -204,22 +195,19 @@ router.post('/upload-logo', auth, upload.single('logo'), async (req, res) => {
 // Get available logos (host only)
 router.get('/logos', auth, async (req, res) => {
   try {
-    const logosDir = path.join(__dirname, '../uploads/logos');
+    // Get logos from Google Drive
+    const logos = await googleDriveService.listFiles(process.env.WEDDING_LOGO_FOLDER_ID);
     
-    if (!fs.existsSync(logosDir)) {
-      return res.json({ logos: [] });
-    }
-
-    const files = fs.readdirSync(logosDir);
-    const logos = files
-      .filter(file => /\.(jpg|jpeg|png|gif|svg)$/i.test(file))
+    const formattedLogos = logos
+      .filter(file => /\.(jpg|jpeg|png|gif|svg)$/i.test(file.name))
       .map(file => ({
-        filename: file,
-        url: `/uploads/logos/${file}`,
-        name: file.replace(/^logo-\d+-/, '').replace(/\.[^/.]+$/, '')
+        filename: file.name,
+        url: file.webContentLink,
+        fileId: file.id,
+        name: file.name.replace(/^logo-\d+-/, '').replace(/\.[^/.]+$/, '')
       }));
 
-    res.json({ logos });
+    res.json({ logos: formattedLogos });
   } catch (error) {
     console.error('Get logos error:', error);
     res.status(500).json({ error: 'Failed to get logos' });
@@ -235,36 +223,36 @@ router.get('/proxy-image', async (req, res) => {
       return res.status(400).json({ error: 'URL parameter is required' });
     }
 
-    // Validate that the URL is from our own server
-    if (!url.startsWith('https://backendv2-nasy.onrender.com/uploads/')) {
-      return res.status(400).json({ error: 'Invalid URL' });
+    // For Google Drive URLs, redirect directly
+    if (url.includes('drive.google.com') || url.includes('googleusercontent.com')) {
+      return res.redirect(url);
     }
 
-    // Convert URL to file path
-    const urlPath = url.replace('https://backendv2-nasy.onrender.com', '');
-    const filePath = path.join(__dirname, '..', urlPath);
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'File not found' });
+    // For local file URLs (legacy support)
+    if (url.startsWith('http://localhost:5000/uploads/')) {
+      const urlPath = url.replace('http://localhost:5000', '');
+      const filePath = path.join(__dirname, '..', urlPath);
+      
+      if (fs.existsSync(filePath)) {
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes = {
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.gif': 'image/gif',
+          '.svg': 'image/svg+xml'
+        };
+        
+        res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=31536000');
+        
+        const fileStream = fs.createReadStream(filePath);
+        fileStream.pipe(res);
+        return;
+      }
     }
 
-    // Set appropriate headers
-    const ext = path.extname(filePath).toLowerCase();
-    const mimeTypes = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.svg': 'image/svg+xml'
-    };
-    
-    res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-    
-    // Stream the file
-    const fileStream = fs.createReadStream(filePath);
-    fileStream.pipe(res);
+    res.status(404).json({ error: 'File not found' });
     
   } catch (error) {
     console.error('Proxy image error:', error);
@@ -273,17 +261,12 @@ router.get('/proxy-image', async (req, res) => {
 });
 
 // Delete logo (host only)
-router.delete('/logos/:filename', auth, async (req, res) => {
+router.delete('/logos/:fileId', auth, async (req, res) => {
   try {
-    const { filename } = req.params;
-    const logoPath = path.join(__dirname, '../uploads/logos', filename);
+    const { fileId } = req.params;
     
-    if (fs.existsSync(logoPath)) {
-      fs.unlinkSync(logoPath);
-      res.json({ message: 'Logo deleted successfully' });
-    } else {
-      res.status(404).json({ error: 'Logo not found' });
-    }
+    await googleDriveService.deleteFile(fileId);
+    res.json({ message: 'Logo deleted successfully' });
   } catch (error) {
     console.error('Delete logo error:', error);
     res.status(500).json({ error: 'Failed to delete logo' });
