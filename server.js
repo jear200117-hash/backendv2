@@ -37,6 +37,7 @@ app.use('/api/', limiter);
 const allowedOrigins = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
+  'https://mjandericawedding.site',
   config.FRONTEND_URL
 ].filter(Boolean);
 
@@ -48,7 +49,8 @@ app.use(cors({
       const isAllowed =
         allowedOrigins.includes(origin) ||
         /\.netlify\.app$/.test(hostname) ||
-        /onrender\.com$/.test(hostname);
+        /onrender\.com$/.test(hostname) ||
+        /mjandericawedding\.site$/.test(hostname);
       if (isAllowed) return callback(null, true);
     } catch (e) {
       // If URL parsing fails, fall through and reject
@@ -78,7 +80,10 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/uploads', (req, res, next) => {
   // Set CORS headers for static files
   const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
+  if (allowedOrigins.includes(origin) || 
+      (origin && (origin.includes('mjandericawedding.site') || 
+                  origin.includes('netlify.app') || 
+                  origin.includes('onrender.com')))) {
     res.header('Access-Control-Allow-Origin', origin);
   }
   res.header('Access-Control-Allow-Credentials', 'true');
