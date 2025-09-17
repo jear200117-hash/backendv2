@@ -139,7 +139,32 @@ process.on('uncaughtException', (err) => {
 mongoose.connect(config.MONGODB_URI)
   .then(() => {
     console.log('Connected to MongoDB');
-    app.listen(PORT, () => {
+
+    // Initialize HTTP server and Socket.IO
+    const http = require('http');
+    const httpServer = http.createServer(app);
+    const { Server } = require('socket.io');
+
+    const io = new Server(httpServer, {
+      cors: {
+        origin: allowedOrigins,
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+      }
+    });
+
+    // Make io accessible in routes via req.app.get('io')
+    app.set('io', io);
+
+    io.on('connection', (socket) => {
+      console.log('Socket connected:', socket.id);
+      socket.on('disconnect', () => {
+        console.log('Socket disconnected:', socket.id);
+      });
+    });
+
+    httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
   })

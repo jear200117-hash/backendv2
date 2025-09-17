@@ -79,6 +79,16 @@ router.post('/submit/:qrCode', async (req, res) => {
       await invitation.markAsOpened(clientIP, userAgent);
     }
 
+    // Emit realtime update
+    try {
+      req.app.get('io')?.emit('rsvp:updated', {
+        qrCode,
+        status: invitation.rsvp.status,
+        attendeeCount: invitation.rsvp.attendeeCount,
+        respondedAt: invitation.rsvp.respondedAt
+      });
+    } catch (_) {}
+
     res.json({
       message: 'RSVP submitted successfully',
       rsvp: {
@@ -243,6 +253,15 @@ router.put('/update/:id', auth, async (req, res) => {
     }
 
     await invitation.save();
+
+    // Emit realtime update
+    try {
+      req.app.get('io')?.emit('rsvp:updated', {
+        id: invitation._id,
+        status: invitation.rsvp.status,
+        attendeeCount: invitation.rsvp.attendeeCount
+      });
+    } catch (_) {}
 
     res.json({
       message: 'RSVP updated successfully',

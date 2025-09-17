@@ -94,6 +94,14 @@ router.post('/', auth, [
       qrCode: album.qrCode,
       uploadUrl: album.uploadUrl
     });
+    // Emit realtime create
+    try {
+      req.app.get('io')?.emit('albums:created', {
+        id: album._id,
+        name: album.name,
+        isPublic: album.isPublic
+      });
+    } catch (_) {}
 
     res.status(201).json({
       message: 'Album created successfully',
@@ -273,6 +281,13 @@ router.put('/:id/regenerate-qr', auth, async (req, res) => {
     }
 
     await album.save();
+    // Emit realtime QR update
+    try {
+      req.app.get('io')?.emit('albums:updated', {
+        id: album._id,
+        qrCode: album.qrCode
+      });
+    } catch (_) {}
 
     res.json({
       message: 'QR code regenerated successfully',
@@ -393,6 +408,15 @@ router.put('/:id', auth, [
     if (isFeatured !== undefined) album.isFeatured = isFeatured;
 
     await album.save();
+    // Emit realtime update
+    try {
+      req.app.get('io')?.emit('albums:updated', {
+        id: album._id,
+        name: album.name,
+        isPublic: album.isPublic,
+        isFeatured: album.isFeatured
+      });
+    } catch (_) {}
 
     res.json({
       message: 'Album updated successfully',
@@ -428,6 +452,10 @@ router.delete('/:id', auth, async (req, res) => {
     await Media.deleteMany({ album: id });
 
     await album.deleteOne();
+    // Emit realtime delete
+    try {
+      req.app.get('io')?.emit('albums:deleted', { id });
+    } catch (_) {}
 
     res.json({ message: 'Album deleted successfully' });
   } catch (error) {
@@ -460,6 +488,13 @@ router.put('/:id/cover', auth, [
 
     album.coverImage = coverImage;
     await album.save();
+    // Emit realtime cover update
+    try {
+      req.app.get('io')?.emit('albums:updated', {
+        id: album._id,
+        coverImage: album.coverImage
+      });
+    } catch (_) {}
 
     res.json({
       message: 'Album cover updated successfully',

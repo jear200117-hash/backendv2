@@ -145,6 +145,14 @@ router.post('/upload/qr/:qrCode', upload.array('media', 10), handleUploadError, 
       qrCode
     });
 
+    // Emit realtime media upload (guest)
+    try {
+      req.app.get('io')?.emit('media:uploaded', {
+        albumId: album._id,
+        count: uploadedMedia.length
+      });
+    } catch (_) {}
+
     res.status(201).json({
       message: `${uploadedMedia.length} media files uploaded successfully`,
       media: uploadedMedia.map(media => ({
@@ -251,6 +259,14 @@ router.post('/host/upload/:albumId', auth, upload.array('media', 10), handleUplo
     // Update album media count
     await album.updateMediaCount();
 
+    // Emit realtime media upload (host)
+    try {
+      req.app.get('io')?.emit('media:uploaded', {
+        albumId: albumId,
+        count: uploadedMedia.length
+      });
+    } catch (_) {}
+
     res.status(201).json({
       message: `${uploadedMedia.length} media files uploaded successfully`,
       media: uploadedMedia.map(media => ({
@@ -350,6 +366,15 @@ router.put('/:id/approve', auth, [
       await album.updateMediaCount();
     }
 
+    // Emit realtime approval update
+    try {
+      req.app.get('io')?.emit('media:approved', {
+        id: media._id,
+        albumId: media.album,
+        isApproved: media.isApproved
+      });
+    } catch (_) {}
+
     res.json({
       message: `Media ${isApproved ? 'approved' : 'rejected'} successfully`,
       media: {
@@ -401,6 +426,11 @@ router.delete('/:id', auth, async (req, res) => {
     if (album) {
       await album.updateMediaCount();
     }
+
+    // Emit realtime delete
+    try {
+      req.app.get('io')?.emit('media:deleted', { id, albumId: album?._id });
+    } catch (_) {}
 
     res.json({ message: 'Media deleted successfully' });
   } catch (error) {

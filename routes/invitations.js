@@ -82,6 +82,16 @@ router.post('/', auth, [
 
     await invitation.save();
 
+    // Emit realtime create
+    try {
+      req.app.get('io')?.emit('invitations:created', {
+        id: invitation._id,
+        guestName: invitation.guestName,
+        guestRole: invitation.guestRole,
+        qrCode: invitation.qrCode
+      });
+    } catch (_) {}
+
     res.status(201).json({
       message: 'Invitation created successfully',
       invitation: {
@@ -229,6 +239,14 @@ router.put('/:id', auth, [
 
     await invitation.save();
 
+    // Emit realtime update
+    try {
+      req.app.get('io')?.emit('invitations:updated', {
+        id: invitation._id,
+        isActive: invitation.isActive
+      });
+    } catch (_) {}
+
     res.json({
       message: 'Invitation updated successfully',
       invitation: {
@@ -270,6 +288,11 @@ router.delete('/:id', auth, async (req, res) => {
     }
 
     await invitation.deleteOne();
+
+    // Emit realtime delete
+    try {
+      req.app.get('io')?.emit('invitations:deleted', { id });
+    } catch (_) {}
 
     res.json({ message: 'Invitation deleted successfully' });
   } catch (error) {
